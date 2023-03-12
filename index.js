@@ -1,3 +1,4 @@
+require('dotenv').config()
 const express = require('express')
 var morgan = require('morgan')
 const cors = require('cors')
@@ -7,39 +8,21 @@ app.use(cors())
 app.use(express.static('build'))
 app.use(express.json())
 
+const Contact = require('./contact')
+
 morgan.token('data-resp', function (req, res) { return JSON.stringify(req.body) })
 app.use(morgan(':method :url :status :res[content-length] - :response-time ms :data-resp'))
 
 let persons = [
-    {
-        "name": "Arto Hellas",
-        "number": "040-123456",
-        "id": 1
-    },
-    {
-        "name": "Ada Lovelace",
-        "number": "39-44-5323523",
-        "id": 2
-    },
-    {
-        "name": "Dan Abramov",
-        "number": "12-43-234345",
-        "id": 3
-    },
-    {
-        "name": "Mary Poppendieck",
-        "number": "39-23-6423122",
-        "id": 4
-    }
 ]
 
-const requestLogger = (request, response, next) => {
-    console.log('Method:', request.method)
-    console.log('Path:  ', request.path)
-    console.log('Body:  ', request.body)
-    console.log('---')
-    next()
-}
+// const requestLogger = (request, response, next) => {
+//     console.log('Method:', request.method)
+//     console.log('Path:  ', request.path)
+//     console.log('Body:  ', request.body)
+//     console.log('---')
+//     next()
+// }
 
 // app.use(requestLogger)
 
@@ -54,33 +37,56 @@ app.get('/info', (request, response) => {
     response.send(textMessage)
 })
 
+// GET ALL PHONE CONTACTS
 app.get('/api/persons', (request, response) => {
-    response.json(persons)
+    Contact.find({}).then(result => {
+        console.log(result)
+        response.json(result)
+    })
 })
 
-app.get('/api/persons/:id', (request, response) => {
-    const id = +request.params.id
-    const person = persons.find(p => p.id === id)
-    if (person) {
-        response.json(person)
-    } else {
-        response.status(404).end()
-    }
+// GET A PHONE CONTACT BY ID
+app.get('/api/persons/:id', (request, response, next) => {
+    Contact.findById(request.params.id)
+        .then(person => {
+            if (person) {
+                response.json(person)
+            } else {
+                response.status(404).end()
+            }
+        })
+        .catch(error => next(error))
 })
 
-const generateId = () => {
-    return Math.floor(Math.random() * 100000);
-}
 
-const isNameExisting = (name) => {
-    const found = persons.find(p => p.name === name)
-    if (found) {
-        return true
+// UPDATE PHONE CONTACT
+app.put('/api/persons/:id', (request, response, next) => {
+    const id = request.params.id
+
+    const person = {
+        name: request.body.name,
+        number: request.body.number
     }
-    return false
-}
 
-app.post('/api/persons', (request, response) => {
+    Contact.findByIdAndUpdate(request.params.id, person, { new: true })
+        .then(updatedContact => {
+            response.json(updatedContact)
+        })
+        .catch(error => next(error))
+})
+
+// DELETE PHONE CONTACT
+app.delete('/api/persons/:id', (request, response, next) => {
+    Contact.findOneAndRemove(request.params.id)
+        .then(result => {
+            response.status(204).end()
+        })
+        .catch(error => next(error))
+})
+
+
+// ADD A NEW PHONE CONTACT
+app.post('/api/persons', (request, response, next) => {
     const body = request.body
 
     if (!body.name) {
@@ -95,21 +101,33 @@ app.post('/api/persons', (request, response) => {
         })
     }
 
-    if (isNameExisting(body.name)) {
-        return response.status(400).json({
-            error: `name ${body.name} already exist`
-        })
-    }
-
     const person = {
         name: body.name,
         number: body.number,
-        id: generateId()
     }
-
-    persons = persons.concat(person)
-
-    response.json(person)
+    Contact.find({ name: person.name }).then(result => {
+        if (result && result.length > 0) {
+            const id = result[0]._id.toString()
+            const person = {
+                name: body.name,
+                number: body.number,
+            }
+            Contact.findByIdAndUpdate(id, person, { new: true })
+                .then(updatedContact => {
+                    response.json(updatedContact)
+                })
+                .catch(error => next(error))
+        } else {
+            const tmpPerson = new Contact({
+                name: body.name,
+                number: body.number
+            })
+            tmpPerson.save().then(result => {
+                console.log(`Added ${result.name} ${result.number} to phonebook`)
+                response.json(tmpPerson)
+            }).catch(error => next(error))
+        }
+    })
 })
 
 const unknownEndpoint = (request, response) => {
@@ -118,7 +136,20 @@ const unknownEndpoint = (request, response) => {
 
 app.use(unknownEndpoint)
 
+const errorHandler = (error, request, response, next) => {
+    console.log(error.message)
 
-const PORT = process.env.PORT || 3001
+    if (error.name === 'CastError') {
+        return response.status(400).send({ error: 'malformatted id' })
+    } else if (error.name === 'ValidationError') {
+        return response.status(400).json({ error: error.message })
+    }
+    next(error)
+}
+
+app.use(errorHandler)
+
+
+const PORT = process.env.PORT
 app.listen(PORT)
 console.log(`phonebook server running on ${PORT}`)
